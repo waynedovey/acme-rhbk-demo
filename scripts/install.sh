@@ -27,7 +27,7 @@ oc apply -f manifests/30-portal.yaml
 # Set it before bootstrap so a later bootstrap failure cannot leave placeholder/broken links.
 KC_HOST=$(oc -n rhbk get route acme-keycloak -o jsonpath='{.spec.host}')
 KC_URL="https://${KC_HOST}"
-oc -n rhbk set env deployment/acme-portal KEYCLOAK_URL="$KC_URL" >/dev/null
+oc -n rhbk set env deployment/acme-portal KEYCLOAK_URL="$KC_URL" KEYCLOAK_BACKCHANNEL_URL="http://acme-keycloak-service:8080" >/dev/null
 
 # Restart on reruns so ConfigMap source and environment changes are picked up immediately.
 oc -n rhbk rollout restart deployment/acme-portal >/dev/null

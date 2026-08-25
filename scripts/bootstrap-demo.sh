@@ -26,9 +26,10 @@ KC_HOST=$(oc -n "$NS" get route "$KC_NAME" -o jsonpath='{.spec.host}')
 KC_URL="https://${KC_HOST}"
 PORTAL_HOST=$(oc -n "$NS" get route acme-portal -o jsonpath='{.spec.host}')
 PORTAL_URL="https://${PORTAL_HOST}"
+KC_INTERNAL="http://${KC_NAME}-service:8080"
 
 # Always repair the portal issuer URL before touching realm configuration.
-oc -n "$NS" set env deployment/acme-portal KEYCLOAK_URL="$KC_URL" >/dev/null
+oc -n "$NS" set env deployment/acme-portal KEYCLOAK_URL="$KC_URL" KEYCLOAK_BACKCHANNEL_URL="$KC_INTERNAL" >/dev/null
 oc -n "$NS" rollout status deployment/acme-portal --timeout=180s >/dev/null
 
 ADMIN_USER=$(secret_value "${KC_NAME}-initial-admin" username)
@@ -39,6 +40,7 @@ PEOPLESOFT_SECRET=$(secret_value acme-demo-secrets peoplesoft-client-secret)
 CLI_SECRET=$(secret_value acme-demo-secrets cli-client-secret)
 LEGACY_SECRET=$(secret_value acme-demo-secrets legacy-broker-secret)
 PARTNER_SECRET=$(secret_value acme-demo-secrets partner-broker-secret)
+CORPORATE_SECRET=$(secret_value acme-demo-secrets corporate-broker-secret)
 
 # Use Admin CLI from inside the Keycloak pod. This is intentionally different
 # from obtaining an admin token through the public OIDC token endpoint: temporary
@@ -142,15 +144,17 @@ ensure_idp() {
   local alias=$1 display=$2 provider_realm=$3 secret=$4
   local current updated payload
   if current=$(kcadm get "identity-provider/instances/$alias" -r acme-demo 2>/dev/null); then
-    updated=$(jq --arg d "$display" '.displayName=$d' <<<"$current")
+    updated=$(jq \
+      --arg d "$display" --arg s "$secret" --arg u "$KC_URL" --arg bi "$KC_INTERNAL" --arg pr "$provider_realm" \
+      '.displayName=$d | .enabled=true | .trustEmail=true | .storeToken=true | .config=((.config // {}) + {clientId:"acme-broker",clientSecret:$s,authorizationUrl:($u+"/realms/"+$pr+"/protocol/openid-connect/auth"),tokenUrl:($bi+"/realms/"+$pr+"/protocol/openid-connect/token"),logoutUrl:($u+"/realms/"+$pr+"/protocol/openid-connect/logout"),userInfoUrl:($bi+"/realms/"+$pr+"/protocol/openid-connect/userinfo"),jwksUrl:($bi+"/realms/"+$pr+"/protocol/openid-connect/certs"),issuer:($u+"/realms/"+$pr),useJwksUrl:"true",validateSignature:"true",syncMode:"IMPORT",showInAccountConsole:"ALWAYS"})' <<<"$current")
     printf '%s' "$updated" | kcadm_stdin update "identity-provider/instances/$alias" -r acme-demo -n -f - >/dev/null
     echo "Reconciled identity provider: $alias -> $display"
     return
   fi
 
   payload=$(jq -n \
-    --arg a "$alias" --arg d "$display" --arg s "$secret" --arg u "$KC_URL" --arg pr "$provider_realm" \
-    '{alias:$a,displayName:$d,providerId:"keycloak-oidc",enabled:true,trustEmail:true,storeToken:true,firstBrokerLoginFlowAlias:"first broker login",config:{clientId:"acme-broker",clientSecret:$s,authorizationUrl:($u+"/realms/"+$pr+"/protocol/openid-connect/auth"),tokenUrl:($u+"/realms/"+$pr+"/protocol/openid-connect/token"),logoutUrl:($u+"/realms/"+$pr+"/protocol/openid-connect/logout"),userInfoUrl:($u+"/realms/"+$pr+"/protocol/openid-connect/userinfo"),jwksUrl:($u+"/realms/"+$pr+"/protocol/openid-connect/certs"),issuer:($u+"/realms/"+$pr),useJwksUrl:"true",validateSignature:"true",syncMode:"IMPORT"}}')
+    --arg a "$alias" --arg d "$display" --arg s "$secret" --arg u "$KC_URL" --arg bi "$KC_INTERNAL" --arg pr "$provider_realm" \
+    '{alias:$a,displayName:$d,providerId:"keycloak-oidc",enabled:true,trustEmail:true,storeToken:true,linkOnly:false,hideOnLogin:false,firstBrokerLoginFlowAlias:"first broker login",config:{clientId:"acme-broker",clientSecret:$s,authorizationUrl:($u+"/realms/"+$pr+"/protocol/openid-connect/auth"),tokenUrl:($bi+"/realms/"+$pr+"/protocol/openid-connect/token"),logoutUrl:($u+"/realms/"+$pr+"/protocol/openid-connect/logout"),userInfoUrl:($bi+"/realms/"+$pr+"/protocol/openid-connect/userinfo"),jwksUrl:($bi+"/realms/"+$pr+"/protocol/openid-connect/certs"),issuer:($u+"/realms/"+$pr),useJwksUrl:"true",validateSignature:"true",syncMode:"IMPORT",showInAccountConsole:"ALWAYS"}}')
   printf '%s' "$payload" | kcadm_stdin create identity-provider/instances -r acme-demo -f - >/dev/null
   echo "Created identity provider: $alias"
 }
@@ -194,11 +198,13 @@ ensure_peoplesoft_stepup_flow() {
 ensure_realm acme-demo "ACME Digital Identity"
 ensure_realm legacy-idp "Legacy Identity"
 ensure_realm partner-idp "Partner Identity"
+ensure_realm corporate-idp "Corporate Identity"
 
 # Same person represented in three sources; same generated password keeps the live demo simple.
 ensure_user acme-demo alex alex@acme.example "$DEMO_PASS"
 ensure_user legacy-idp alex alex@acme.example "$DEMO_PASS"
 ensure_user partner-idp alex alex@acme.example "$DEMO_PASS"
+ensure_user corporate-idp alex alex@acme.example "$DEMO_PASS"
 
 # Reconcile the RHBK 26.6-compatible passwordless WebAuthn policy.
 kcadm update realms/acme-demo \
@@ -233,7 +239,7 @@ JSON
   echo "Created client scope: acme-demo/orders-api-audience"
 fi
 
-ensure_client acme-demo acme-portal "$(jq -n --arg s "$PORTAL_SECRET" --arg r "$PORTAL_URL/callback" --arg o "$PORTAL_URL" '{clientId:"acme-portal",name:"ACME Portal",enabled:true,protocol:"openid-connect",publicClient:false,secret:$s,clientAuthenticatorType:"client-secret",consentRequired:true,standardFlowEnabled:true,directAccessGrantsEnabled:true,redirectUris:[$r],webOrigins:[$o],attributes:{"standard.token.exchange.enabled":"true"}}')"
+ensure_client acme-demo acme-portal "$(jq -n --arg s "$PORTAL_SECRET" --arg r "$PORTAL_URL/callback" --arg o "$PORTAL_URL" '{clientId:"acme-portal",name:"ACME Portal",enabled:true,protocol:"openid-connect",publicClient:false,secret:$s,clientAuthenticatorType:"client-secret",consentRequired:false,standardFlowEnabled:true,directAccessGrantsEnabled:true,redirectUris:[$r],webOrigins:[$o],attributes:{"standard.token.exchange.enabled":"true"}}')"
 ensure_client acme-demo acme-cli "$(jq -n --arg s "$CLI_SECRET" '{clientId:"acme-cli",name:"ACME CLI Demo Helper",enabled:true,protocol:"openid-connect",publicClient:false,secret:$s,clientAuthenticatorType:"client-secret",consentRequired:false,standardFlowEnabled:false,directAccessGrantsEnabled:true,attributes:{"standard.token.exchange.enabled":"true"}}')"
 ensure_client acme-demo orders-api '{"clientId":"orders-api","name":"ACME Orders API","enabled":true,"protocol":"openid-connect","publicClient":false,"standardFlowEnabled":false,"directAccessGrantsEnabled":false}'
 ensure_client acme-demo high-assurance-api "$(jq -n --arg r "$PORTAL_URL/fapi-callback" '{clientId:"high-assurance-api",name:"ACME High Assurance API",enabled:true,protocol:"openid-connect",publicClient:false,standardFlowEnabled:true,redirectUris:[$r]}')"
@@ -259,9 +265,11 @@ ensure_client acme-demo peoplesoft-app "$(jq -n \
 BROKER_REDIRECT_BASE="$KC_URL/realms/acme-demo/broker"
 ensure_client legacy-idp acme-broker "$(jq -n --arg s "$LEGACY_SECRET" --arg r "$BROKER_REDIRECT_BASE/legacy-idp/endpoint" '{clientId:"acme-broker",name:"ACME Broker",enabled:true,protocol:"openid-connect",publicClient:false,secret:$s,standardFlowEnabled:true,redirectUris:[$r]}')"
 ensure_client partner-idp acme-broker "$(jq -n --arg s "$PARTNER_SECRET" --arg r "$BROKER_REDIRECT_BASE/partner-idp/endpoint" '{clientId:"acme-broker",name:"ACME Broker",enabled:true,protocol:"openid-connect",publicClient:false,secret:$s,standardFlowEnabled:true,redirectUris:[$r]}')"
+ensure_client corporate-idp acme-broker "$(jq -n --arg s "$CORPORATE_SECRET" --arg r "$BROKER_REDIRECT_BASE/corporate-idp/endpoint" '{clientId:"acme-broker",name:"ACME Broker",enabled:true,protocol:"openid-connect",publicClient:false,secret:$s,standardFlowEnabled:true,redirectUris:[$r]}')"
 
 ensure_idp legacy-idp "Legacy Identity" legacy-idp "$LEGACY_SECRET"
-ensure_idp partner-idp "Microsoft Entra ID (simulated)" partner-idp "$PARTNER_SECRET"
+ensure_idp partner-idp "Partner Identity" partner-idp "$PARTNER_SECRET"
+ensure_idp corporate-idp "Corporate Identity" corporate-idp "$CORPORATE_SECRET"
 
 # Ensure the passwordless WebAuthn registration required action is enabled.
 kcadm update authentication/required-actions/webauthn-register-passwordless -r acme-demo -s enabled=true >/dev/null

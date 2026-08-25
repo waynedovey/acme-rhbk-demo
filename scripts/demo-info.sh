@@ -35,7 +35,8 @@ Realms
 ------
 acme-demo
 legacy-idp
-partner-idp        (represents Microsoft Entra ID in the customer demo)
+partner-idp        Partner Identity
+corporate-idp      Corporate Identity
 
 PeopleSoft step-up
 ------------------

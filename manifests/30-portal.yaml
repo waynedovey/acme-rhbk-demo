@@ -25,6 +25,8 @@ spec:
           env:
             - name: KEYCLOAK_URL
               value: ""
+            - name: KEYCLOAK_BACKCHANNEL_URL
+              value: "http://acme-keycloak-service:8080"
             - name: REALM
               value: acme-demo
             - name: CLIENT_ID

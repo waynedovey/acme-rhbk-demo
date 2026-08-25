@@ -37,4 +37,4 @@ UPDATED=$(jq --arg sub "$K8S_SUB" '.clientAuthenticatorType="federated-jwt" | .s
 printf '%s' "$UPDATED" | acme_kcadm_stdin update "clients/$UUID" -r acme-demo -n -f - >/dev/null
 
 echo "Configured acme-automation for Signed JWT - Federated"
-exec "$SCRIPT_DIR/workload-token-test.sh"
+echo "Next: ./scripts/workload-token-test.sh"

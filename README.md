@@ -1,709 +1,163 @@
 # ACME Digital Identity Demo — Red Hat build of Keycloak on OpenShift
 
-> **v7 fix:** bootstrap and verification now authenticate with `kcadm.sh` inside the RHBK pod instead of relying on an external password grant for the temporary bootstrap administrator. This is the recommended bundle for the PeopleSoft step-up demo.
+A compact customer-facing **RHBK 26.6** demo for an existing OpenShift cluster. The repository uses only fictional **ACME** identities and applications and generates runtime secrets in OpenShift; no passwords are committed.
 
-This repository builds a compact, customer-facing **Red Hat build of Keycloak (RHBK) 26.6** demonstration on an existing OpenShift / ACM Hub cluster.
+> Demo/lab only. The deployment is intentionally small and is not a production reference architecture.
 
-The lab is deliberately designed to show more than a basic Keycloak login. It demonstrates a modern identity architecture with:
+## What it demonstrates
 
-- Identity brokering from multiple external OIDC identity providers
-- Account linking to a single local identity
-- Passkeys / WebAuthn passwordless authentication
-- PeopleSoft-specific high-assurance authentication that forces a passkey for the sensitive application
-- Scope-based user consent
-- OAuth 2.0 Standard Token Exchange (RFC 8693)
-- OpenShift workload identity using Kubernetes Service Account tokens instead of a static RHBK client secret
-- FAPI 2.0 client policy positioning for high-assurance APIs
-- API-driven / self-service client registration
-- A customer-facing ACME Portal dashboard that clearly exposes every demo chapter and a simulated PeopleSoft HR application
+1. **Identity brokering** — Legacy, Partner and Corporate OIDC identity sources resolve to the ACME realm.
+2. **Passkeys / WebAuthn** — discoverable passwordless credentials and fresh passkey sign-in.
+3. **Client-specific step-up** — `peoplesoft-app` is bound to a dedicated WebAuthn passwordless browser flow.
+4. **Granular OAuth scopes** — request `personal-details`, `orders-history` and `support-profile` independently and show token evidence.
+5. **OAuth 2.0 Token Exchange** — RFC 8693 exchange from the ACME Portal token to an `orders-api` token.
+6. **OpenShift workload identity** — a projected Kubernetes ServiceAccount JWT authenticates `acme-automation` with **Signed JWT - Federated**, with no permanent RHBK client secret.
+7. **API-driven onboarding** — a 10-minute, one-use Initial Access Token registers a client and proves the same IAT cannot be reused.
+8. **FAPI 2.0** — verifies the built-in RHBK FAPI 2 profiles and applies `fapi-2-security-profile` to `high-assurance-api` through a Client Policy.
 
-> **Demo/lab only.** This package intentionally uses a single RHBK replica and a lightweight PostgreSQL database to fit on a constrained ACM Hub. It is not a production reference architecture.
+## Prerequisites
 
----
+- OpenShift cluster and cluster-admin access
+- Default StorageClass
+- Access to the Red Hat Operator catalog and registry
+- Local `oc`, `curl`, `jq`, `openssl`, `python3`
 
-## 1. Demo architecture
-
-The portal is tailored to the customer scenario:
-
-```text
-PeopleSoft -> Oracle Access Manager -> RHBK -> Microsoft Entra ID
-                                   |
-                                   +-> brokering / policy / step-up
-```
-
-The lab simulates the external systems so you can demonstrate the identity behaviour without requiring real PeopleSoft, OAM or Entra connectivity. The two important browser clients are:
-
-```text
-acme-portal
-  normal brokered SSO / passkeys / consent / token exchange
-
-peoplesoft-app
-  browser flow override: peoplesoft-step-up
-  required: WebAuthn Passwordless Authenticator
-```
-
-The entire demo is deployed into namespace `rhbk`. Realms created by the bootstrap are:
-
-```text
-acme-demo       Main ACME identity realm
-legacy-idp      Simulated legacy/OAM-side identity source
-partner-idp     Represents Microsoft Entra ID for the customer demo
-```
-
----
-
-## 2. What the demo proves
-
-| Capability | What to show |
-|---|---|
-| Identity broker | Login through Legacy Identity or Microsoft Entra ID (simulated) |
-| Account linking | External identities resolve to one ACME local user |
-| Passkeys | Register a platform passkey and sign in without typing a password |
-| **PeopleSoft step-up** | Establish normal SSO, then open PeopleSoft and show RHBK forcing Touch ID/passkey again |
-| Consent | Request separate `personal-details`, `orders-history`, and `support-profile` scopes |
-| Token exchange | Exchange the user's portal token for a token targeted to `orders-api` |
-| Workload identity | OpenShift ServiceAccount JWT authenticates a confidential RHBK client without a static RHBK secret |
-| API onboarding | Register a client using a short-lived Initial Access Token |
-| FAPI 2.0 | Show built-in FAPI 2 client profiles for high-assurance OAuth/OIDC |
-
----
-
-## 3. Prerequisites
-
-You need:
-
-- OpenShift 4.x cluster
-- Cluster-admin access for the installation
-- An ACM Hub is fine; this package does **not** require ACM itself
-- A working default StorageClass
-- Access to the Red Hat Operator catalog and Red Hat container registry
-- Local tools:
-  - `oc`
-  - `curl`
-  - `jq`
-  - `openssl`
-  - `python3`
-
-Run the preflight check:
+## Install
 
 ```bash
 ./scripts/preflight.sh
-```
-
-### Hub CPU warning
-
-A single-node Hub often fails scheduling because CPU **requests** are nearly fully committed even when actual CPU use is low.
-
-Check before installing:
-
-```bash
-oc describe node $(oc get nodes -o jsonpath='{.items[0].metadata.name}') | \
-  sed -n '/Allocated resources:/,/Events:/p'
-
-oc adm top node
-```
-
-This demo uses deliberately small requests:
-
-| Component | CPU request | Memory request |
-|---|---:|---:|
-| RHBK | 250m | 1Gi |
-| PostgreSQL | 100m | 256Mi |
-| ACME Portal | 50m | 64Mi |
-
-The RHBK Operator itself also consumes resources.
-
-For a single-node ACM Hub, consider setting ACM and MCE to `availabilityConfig: Basic` rather than High availability before installing additional demo workloads.
-
----
-
-## 4. Quick install
-
-Extract the ZIP and run:
-
-```bash
-cd acme-rhbk-demo
 ./scripts/install.sh
 ```
 
-The installer will:
+The installer creates namespace `rhbk`, PostgreSQL, RHBK, the ACME Portal, demo realms/clients/scopes/users and the workload ServiceAccount.
 
-1. Validate the OpenShift connection and required local tools.
-2. Create namespace `rhbk`.
-3. Install the RHBK Operator in `rhbk` if it is not already installed there.
-4. Generate runtime-only demo secrets.
-5. Deploy a lightweight persistent PostgreSQL 15 database.
-6. Deploy the `acme-keycloak` Keycloak CR.
-7. Expose RHBK with an OpenShift edge Route using the cluster router certificate.
-8. Deploy the lightweight ACME Portal.
-9. Create the three demo realms, clients, scopes, users and two OIDC brokers.
-10. Create the OpenShift workload ServiceAccount used by the workload identity demo.
-11. Print all demo URLs and the generated demo password.
-
-The RHBK Subscription uses the channel containing `26.6` when available. Override it if required:
-
-```bash
-RHBK_CHANNEL=stable-v26.6 ./scripts/install.sh
-```
-
-For a lab, the script defaults the OLM install plan approval to `Automatic`. Override it with:
-
-```bash
-INSTALL_PLAN_APPROVAL=Manual ./scripts/install.sh
-```
-
-For production, review release notes and use controlled/manual upgrades.
-
-### Updating an existing v5 demo
-
-If the demo is already installed and healthy, you do **not** need to reinstall RHBK or PostgreSQL. Extract this bundle over a fresh directory and run:
+For an existing deployment, apply the current source without rebuilding the database:
 
 ```bash
 ./scripts/apply-demo-update.sh
-./scripts/verify-peoplesoft-stepup.sh
 ```
 
-The update preserves the existing database and secrets, adds only the missing PeopleSoft client secret, updates the portal code, creates/reconciles `peoplesoft-app`, and creates the `peoplesoft-step-up` authentication flow.
-
----
-
-### TLS note for the demo portal
-
-The browser-facing OpenShift Routes use HTTPS. The tiny in-cluster ACME Portal defaults to not validating the router certificate for its own server-side OAuth calls so the kit also works on clusters using a private/default router certificate. Set `VERIFY_TLS=true` on the `acme-portal` deployment if your router certificate is trusted by the portal container and you want strict verification.
-
-## 5. Get the demo information
-
-At any time run:
+## URLs and generated credentials
 
 ```bash
 ./scripts/demo-info.sh
 ```
 
-It prints:
+Secrets are generated into OpenShift Secrets and are not stored in this repository.
 
-- RHBK URL
-- Admin Console URL
-- ACME Portal URL
-- Local ACME demo username/password
-- Legacy IdP username/password
-- Microsoft Entra ID simulation username/password
-- PeopleSoft client and passkey step-up flow details
+## Recommended demo sequence
 
-No passwords are stored in this README or committed into manifests. They are generated when you install the demo and held in OpenShift Secrets.
+Open the Portal printed by `demo-info.sh`, then walk through sections 1–8 in order.
 
-The Operator-generated bootstrap admin credentials can be retrieved with:
+### 1. Identity brokering
 
-```bash
-oc -n rhbk get secret acme-keycloak-initial-admin \
-  -o jsonpath='{.data.username}' | base64 --decode; echo
+Use the Portal buttons for:
 
-oc -n rhbk get secret acme-keycloak-initial-admin \
-  -o jsonpath='{.data.password}' | base64 --decode; echo
-```
+- Legacy Identity
+- Partner Identity
+- Corporate Identity
 
----
+The Portal status turns green after successful brokered authentication. The **Revoke** button resets only the Portal demo indicator; persistent federated identity links remain managed by RHBK.
 
-# Customer demo runbook
+### 2. Passkeys / WebAuthn
 
-The full presenter script is in:
+Register a credential from the Portal, then use **Test standard passkey sign-in** and select **Sign in with Passkey** in RHBK. The Portal status is a demo-flow indicator; credential management remains in the RHBK Account Console.
 
-```text
-docs/DEMO-RUNBOOK.md
-```
+### 3. PeopleSoft client-specific step-up
 
-A strong 40–45 minute sequence is:
+`peoplesoft-app` uses the `peoplesoft-step-up` browser-flow override with `WebAuthn Passwordless Authenticator` set to `REQUIRED`.
 
-```text
-00–05  Customer architecture and broker model
-05–11  Brokered login + account linking
-11–16  Passkey registration / passwordless login
-16–24  PeopleSoft-specific passkey step-up
-24–29  Granular OAuth consent
-29–34  Standard Token Exchange
-34–39  OpenShift workload identity
-39–42  API-driven onboarding
-42–45  FAPI 2.0 and wrap-up
-```
+### 4. Granular scopes
 
----
+The Portal provides a clear review UX and then asks RHBK for optional scopes. A status turns green only when the returned token contains the requested scope(s).
 
-## 6. Demo #1 — identity brokering
+The Portal intentionally keeps `consentRequired=false` on `acme-portal`; this demo shows granular OAuth scope issuance, not a complete business consent ledger.
 
-Open the ACME Portal:
+### 5. RFC 8693 Token Exchange
 
-```bash
-./scripts/demo-info.sh
-```
+View the current claims, then exchange the source token for `aud=orders-api`. The evidence page shows sanitized claims and token fingerprints rather than bearer tokens.
 
-Click **Sign in to ACME**.
-
-The RHBK login screen will show broker choices for:
-
-```text
-Legacy Identity
-Microsoft Entra ID (simulated)
-```
-
-The bootstrap creates the same test person in all three realms so you can demonstrate that an external identity can be linked to one local ACME identity.
-
-Use the password printed by `demo-info.sh`.
-
-### Talking point
-
-RHBK separates the application-facing identity from the upstream authentication system. Applications trust ACME RHBK, while RHBK brokers authentication to one or many external identity providers.
-
----
-
-## 7. Demo #2 — passkeys
-
-RHBK 26.6 supports passkey authentication using WebAuthn.
-
-### Enable passkeys in the `acme-demo` realm
-
-In the Admin Console:
-
-```text
-Realm: acme-demo
-
-Authentication
-  -> Required actions
-  -> WebAuthn Register Passwordless
-  -> Enabled
-```
-
-Then:
-
-```text
-Realm settings
-  -> Login
-  -> Login screen customization
-  -> Enable Passkeys = ON
-```
-
-Recommended demo setting:
-
-```text
-Passkey Mediation = conditional
-```
-
-Then check:
-
-```text
-Authentication
-  -> Policies
-  -> WebAuthn Passwordless Policy
-```
-
-Suggested values for a demo:
-
-```text
-RP Entity Name               ACME Digital Identity
-User Verification Requirement Required
-Authenticator Attachment     Not specified
-```
-
-If demonstrating Windows Hello, ensure `RS256` is available in the passwordless WebAuthn signature algorithms.
-
-### Register the passkey
-
-Login to ACME as `alex`, open the Account Console, and go to:
-
-```text
-Account security
-  -> Signing in
-  -> Passkey / WebAuthn Passwordless
-```
-
-Register Touch ID, Windows Hello, a phone passkey, or a FIDO2 security key.
-
-Log out and sign in again using **Sign in with Passkey** or the browser's passkey autofill.
-
-### Talking point
-
-Passkeys replace reusable passwords and OTP with phishing-resistant public-key authentication while retaining a simple user experience.
-
----
-
-## 8. Demo #3 — PeopleSoft-specific step-up authentication
-
-The customer-specific part of the lab is a second OIDC client:
-
-```text
-peoplesoft-app
-```
-
-It is bound to a dedicated browser flow:
-
-```text
-peoplesoft-step-up
-  -> WebAuthn Passwordless Authenticator    REQUIRED
-```
-
-The portal makes the sequence obvious:
-
-1. Register/verify a passkey.
-2. Sign in normally to establish ordinary ACME SSO.
-3. Click **Open PeopleSoft — require Touch ID / passkey**.
-4. RHBK forces the PeopleSoft-specific passkey flow.
-5. After successful step-up, the simulated PeopleSoft HR employee profile opens.
-6. Use **View token evidence** to show the OIDC client/session claims.
-
-The PeopleSoft authorization request also uses `prompt=login` and `max_age=0` so the stronger authentication is demonstrated every time rather than being hidden by a prior browser SSO cookie.
-
-### Talking point
-
-The user already has normal corporate SSO, but PeopleSoft contains sensitive personal information, so RHBK applies a stronger authentication control specifically to that application instead of increasing friction for every application.
-
----
-
-## 9. Demo #4 — granular consent
-
-The bootstrap creates these optional OAuth scopes:
-
-```text
-personal-details
-orders-history
-support-profile
-```
-
-Each has user-facing consent text.
-
-Open the ACME Portal and choose one of the consent examples.
-
-The portal sends an Authorization Code request with the selected optional scopes. RHBK displays them separately on the consent screen.
-
-To repeat the consent demonstration after the user has already granted it, run:
-
-```bash
-./scripts/reset-consent.sh
-```
-
-### Important boundary
-
-RHBK provides OAuth scopes, consent screens and authorization foundations. A full business consent ledger with concepts such as data source, purpose, effective date, expiry, extension, historical revocation and business audit is normally implemented as an application/service integrated with RHBK rather than treated as a turnkey Keycloak feature.
-
----
-
-## 10. Demo #5 — Standard Token Exchange
-
-RHBK 26.6 enables the supported **Standard Token Exchange V2** server capability by default. The requesting confidential client must also have its Standard Token Exchange capability enabled.
-
-The bootstrap creates:
-
-```text
-acme-portal     browser-facing confidential client
-acme-cli        consent-free CLI helper used by token-exchange.sh
-orders-api      downstream target audience
-```
-
-and a default audience scope that adds `orders-api` to the original access token.
-
-### Browser demo
-
-1. Login to the ACME Portal.
-2. Open **View token claims**.
-3. Select **Exchange token for Orders API**.
-4. Compare the original and exchanged JWT claims.
-
-### CLI demo
-
-```bash
-./scripts/token-exchange.sh
-```
-
-The script uses the dedicated `acme-cli` helper client to obtain a demo user token, then exchanges it using RFC 8693 for an access token filtered to the `orders-api` audience. The browser demonstration continues to use `acme-portal`.
-
-### Talking point
-
-Do not forward a broad user token to every downstream service. Exchange it for a shorter-lived token with only the audience/scopes needed by the next service.
-
----
-
-## 11. Demo #6 — OpenShift workload identity
-
-This is the machine-identity part of the demo.
-
-Traditional model:
-
-```text
-Pod -> client_id + long-lived client_secret -> RHBK
-```
-
-Demo model:
-
-```text
-Pod -> projected short-lived Kubernetes ServiceAccount JWT -> RHBK -> OAuth token
-```
-
-Run:
+### 6. OpenShift workload identity
 
 ```bash
 ./scripts/configure-workload-identity.sh
-```
-
-The script:
-
-- Creates/uses ServiceAccount `acme-automation`.
-- Detects the OpenShift service-account issuer.
-- Configures a Kubernetes Identity Provider in `acme-demo`.
-- Configures client `acme-automation` with the **Signed JWT - Federated** authenticator.
-- Creates a temporary test Pod with a projected token whose audience is the ACME realm issuer.
-- Exchanges that short-lived ServiceAccount JWT for an RHBK OAuth access token.
-
-Re-run the test without recreating the configuration:
-
-```bash
 ./scripts/workload-token-test.sh
 ```
 
-### Talking point
+Expected flow:
 
-The workload no longer needs a long-lived Keycloak client secret stored in a namespace, Ansible variable or CI/CD platform. OpenShift supplies the workload identity and RHBK validates it.
+```text
+OpenShift ServiceAccount
+  -> projected 600-second JWT
+  -> RHBK Kubernetes identity provider
+  -> Signed JWT - Federated
+  -> client_credentials
+  -> short-lived OAuth access token
+```
 
----
+The test Pod contains no RHBK client secret and satisfies restricted PodSecurity settings.
 
-## 12. Demo #7 — developer self-service / automation
-
-The entire lab bootstrap is itself performed with the RHBK Admin REST API.
-
-For a more visible self-service example run:
+### 7. API-driven onboarding
 
 ```bash
 ./scripts/dynamic-client-registration.sh
 ```
 
-The script:
+The script creates a **600-second / one-use** Initial Access Token, uses only that token for the developer registration call, verifies the registered client where a Registration Access Token is returned, then deliberately reuses the same IAT and expects rejection.
 
-1. Creates a short-lived Initial Access Token.
-2. Calls the OIDC Dynamic Client Registration endpoint.
-3. Registers a new application without giving the application team realm-admin credentials.
-4. Prints the resulting client metadata.
+The sandbox Route may not expose the Client Registration path, so the script uses a temporary `oc port-forward` as transport. The registration request is still authenticated only by the IAT.
 
-This can be incorporated into GitOps, Ansible or an application onboarding pipeline.
+### 8. FAPI 2.0
 
-### Operator positioning
-
-The RHBK Operator manages the RHBK deployment lifecycle and supports one-time `KeycloakRealmImport` operations. Realm Import is not a continuous realm/client reconciliation engine: an existing realm is not overwritten and edits made later are not automatically synchronized back to the Realm Import CR.
-
-For ongoing identity configuration automation use mechanisms such as:
-
-- Admin REST API
-- `kcadm.sh`
-- OIDC Dynamic Client Registration
-- Client Policies / Client Registration Policies
-- Ansible or GitOps pipelines that call the APIs
-
----
-
-## 13. Demo #8 — FAPI 2.0
-
-The bootstrap creates client:
-
-```text
-high-assurance-api
+```bash
+./scripts/configure-fapi2.sh
 ```
 
-In the Admin Console:
-
-```text
-Realm settings
-  -> Client policies
-  -> Profiles
-```
-
-Show the built-in global profiles:
+The script verifies these built-in profiles from the running RHBK instance:
 
 ```text
 fapi-2-security-profile
-fapi-2-dpop-security-profile
 fapi-2-message-signing
+fapi-2-dpop-security-profile
 fapi-2-dpop-message-signing
 ```
 
-Then create a client policy that applies the appropriate global FAPI 2 profile to `high-assurance-api`.
+It then applies `fapi-2-security-profile` to `high-assurance-api` using the `acme-fapi2-high-assurance` Client Policy and verifies the configuration before the Portal turns green.
 
-### Talking point
+This proves **RHBK FAPI policy configuration**; it does not claim independent certification of the ACME demo application.
 
-FAPI is useful beyond banking. It is a hardened OAuth/OIDC profile for APIs where stronger assurance, sender constraints, request integrity and stricter client behaviour are valuable.
+## Important implementation details
 
----
-
-## 14. Troubleshooting
-
-See:
+The browser uses the public RHBK Route:
 
 ```text
-docs/TROUBLESHOOTING.md
+KEYCLOAK_URL=https://<route>
 ```
 
-Common checks:
-
-```bash
-oc get pods -n rhbk
-oc get keycloak acme-keycloak -n rhbk
-oc get route -n rhbk
-oc logs -n rhbk statefulset/acme-keycloak
-oc logs -n rhbk deployment/postgres-db
-```
-
-### `Insufficient cpu`
-
-Check reservations rather than only real CPU use:
-
-```bash
-oc describe node $(oc get nodes -o jsonpath='{.items[0].metadata.name}') | \
-  sed -n '/Allocated resources:/,/Events:/p'
-```
-
-The Keycloak CR in this kit requests only `250m` CPU.
-
-
-### PostgreSQL: `tuple already updated by self` / `another server might be running`
-
-If the demo PostgreSQL pod enters a crash loop with messages such as:
+Server-to-server token calls from the Portal use the internal service:
 
 ```text
-pg_ctl: another server might be running
-ERROR: tuple already updated by self
+KEYCLOAK_BACKCHANNEL_URL=http://acme-keycloak-service:8080
 ```
 
-stop using the PVC immediately. The demo PostgreSQL manifest uses `strategy: Recreate` so a rollout cannot intentionally run two PostgreSQL pods against the same `PGDATA`.
+This avoids routing OAuth backchannel requests through the external OpenShift Route.
 
-For a disposable demo database, the fastest recovery is:
+## Main files
 
-```bash
-./scripts/reset-postgres.sh --yes
+```text
+portal/app.py                         ACME Portal and demo status/evidence UI
+scripts/bootstrap-demo.sh             Realm/client/broker/passkey bootstrap
+scripts/configure-workload-identity.sh Federated workload client configuration
+scripts/workload-token-test.sh         Projected-SA-token live test
+scripts/dynamic-client-registration.sh Controlled client-registration live test
+scripts/configure-fapi2.sh             FAPI 2 Client Policy configuration/test
+scripts/apply-demo-update.sh            Update an existing demo
 ```
 
-This **deletes `postgres-data` and all RHBK database contents**, recreates PostgreSQL, restarts Keycloak, and then tells you to re-run:
-
-```bash
-./scripts/bootstrap-demo.sh
-```
-
-If the database contains data you need to preserve, do **not** use the reset script. Back up the PVC/database and follow a PostgreSQL recovery process instead.
-
-### `UnknownHostException: postgres-db`
-
-Check:
-
-```bash
-oc get svc postgres-db -n rhbk
-oc get pods -l app=postgres-db -n rhbk
-```
-
-The database Service must exist before RHBK can initialize its JDBC datasource.
-
----
-
-## 15. Cleanup
-
-Delete the entire demo:
+## Cleanup
 
 ```bash
 ./scripts/cleanup.sh
 ```
 
-By default this deletes the `rhbk` namespace and everything in it, including PostgreSQL data.
-
-The cluster-scoped RHBK CRDs may remain after cleanup. Do not delete them if another RHBK installation depends on them.
-
----
-
-## 16. Production differences
-
-For a production RHBK architecture do not copy the lab database/topology unchanged. Review at least:
-
-- Multiple RHBK instances
-- Externally managed, supported HA database
-- Database backup and restore
-- Proper TLS and certificate lifecycle
-- Restricted administrative access
-- MFA/passkeys for administrators
-- NetworkPolicies
-- Resource sizing and autoscaling
-- Observability and audit event retention
-- Upgrade strategy with manual approvals/change control
-- Disaster recovery / multi-site requirements
-- Vault/external secret integration where appropriate
-
----
-
-## 17. Directory layout
-
-```text
-acme-rhbk-demo/
-├── README.md
-├── docs/
-│   ├── ARCHITECTURE.md
-│   ├── DEMO-RUNBOOK.md
-│   ├── SOURCES.md
-│   └── TROUBLESHOOTING.md
-├── manifests/
-│   ├── 00-namespace.yaml
-│   ├── 10-postgres.yaml
-│   ├── 20-keycloak-template.yaml
-│   ├── 30-portal.yaml
-│   └── 40-workload-identity.yaml
-├── portal/
-│   └── app.py
-└── scripts/
-    ├── install.sh
-    ├── preflight.sh
-    ├── install-operator.sh
-    ├── generate-secrets.sh
-    ├── deploy-keycloak.sh
-    ├── bootstrap-demo.sh
-    ├── configure-workload-identity.sh
-    ├── workload-token-test.sh
-    ├── token-exchange.sh
-    ├── reset-consent.sh
-    ├── dynamic-client-registration.sh
-    ├── demo-info.sh
-    └── cleanup.sh
-```
-
----
-
-## 17. Official references
-
-Links and product behaviour used by this demo are recorded in `docs/SOURCES.md`.
-
-### Portal redirects to `keycloak.invalid`
-
-If a previous install was interrupted before bootstrap, repair the portal's browser-facing RHBK URL:
-
-```bash
-./scripts/repair-portal.sh
-```
-
-The portal must point to the external `acme-keycloak` OpenShift Route, not a placeholder or the internal service URL.
-
-## Repair: `Client not found` from the ACME Portal
-
-If the RHBK page displays `Client not found`, the browser has successfully reached RHBK and the `acme-demo` realm, but the `acme-portal` OIDC client is missing or incomplete. Repair it without reinstalling the stack:
-
-```bash
-./scripts/repair-portal-client.sh
-```
-
-The repair script creates the client if missing, or reconciles the client secret, current OpenShift Portal Route, redirect URI, web origin, consent setting and Standard Token Exchange flag if it already exists.
-
-Then verify:
-
-```bash
-./scripts/bootstrap-demo.sh
-./scripts/demo-info.sh
-```
-
-The expected redirect URI is the current Portal Route plus `/callback`.
-
-## Force-repairing `Client not found`
-
-If the browser reaches the `acme-demo` realm but displays **Client not found**, do not reinstall the stack. Run:
-
-```bash
-./scripts/force-repair-portal-client.sh
-```
-
-This is deliberately more verbose than the normal bootstrap. It authenticates to the Admin REST API, creates or reconciles `acme-demo/acme-portal`, attaches the consent scopes, updates the running Portal environment, and sends the exact OIDC authorization request used by the demo. It exits non-zero and prints the HTTP response if RHBK still rejects the client.
+For detailed presenter notes see `docs/DEMO-RUNBOOK.md`; for troubleshooting see `docs/TROUBLESHOOTING.md`.

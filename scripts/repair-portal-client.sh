@@ -19,7 +19,7 @@ acme_kcadm get realms/acme-demo >/dev/null 2>&1 || {
 UUID=$(acme_kcadm get clients -r acme-demo -q clientId=acme-portal | jq -r '.[0].id // empty')
 PAYLOAD=$(jq -n --arg s "$PORTAL_SECRET" --arg r "$PORTAL_URL/callback" --arg o "$PORTAL_URL" '{
   clientId:"acme-portal",name:"ACME Portal",enabled:true,protocol:"openid-connect",publicClient:false,secret:$s,
-  clientAuthenticatorType:"client-secret",consentRequired:true,standardFlowEnabled:true,directAccessGrantsEnabled:true,
+  clientAuthenticatorType:"client-secret",consentRequired:false,standardFlowEnabled:true,directAccessGrantsEnabled:true,
   redirectUris:[$r],webOrigins:[$o],attributes:{"standard.token.exchange.enabled":"true"}
 }')
 
@@ -36,7 +36,7 @@ fi
 
 [[ -n "$UUID" ]] || { echo "ERROR: client still missing after repair." >&2; exit 1; }
 
-oc -n "$ACME_NS" set env deployment/acme-portal KEYCLOAK_URL="$KC_URL" >/dev/null
+oc -n "$ACME_NS" set env deployment/acme-portal KEYCLOAK_URL="$KC_URL" KEYCLOAK_BACKCHANNEL_URL="http://acme-keycloak-service:8080" >/dev/null
 oc -n "$ACME_NS" rollout status deployment/acme-portal --timeout=180s >/dev/null
 
 echo
