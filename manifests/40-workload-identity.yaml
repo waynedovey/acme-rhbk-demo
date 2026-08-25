@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: acme-automation
+  namespace: rhbk
+  labels:
+    app.kubernetes.io/part-of: acme-rhbk-demo
