@@ -34,6 +34,13 @@ spec:
                 secretKeyRef:
                   name: acme-demo-secrets
                   key: portal-client-secret
+            - name: PEOPLESOFT_CLIENT_ID
+              value: peoplesoft-app
+            - name: PEOPLESOFT_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: acme-demo-secrets
+                  key: peoplesoft-client-secret
           ports:
             - name: http
               containerPort: 8080

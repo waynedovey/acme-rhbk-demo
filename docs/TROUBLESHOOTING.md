@@ -179,3 +179,80 @@ Verify:
 ```bash
 oc -n rhbk set env deployment/acme-portal --list | grep KEYCLOAK_URL
 ```
+
+## 11. PeopleSoft does not ask for a passkey
+
+Run the verifier first:
+
+```bash
+./scripts/verify-peoplesoft-stepup.sh
+```
+
+The result should show:
+
+```text
+status: READY
+client: peoplesoft-app
+expectedFlow.alias: peoplesoft-step-up
+expectedFlow.passkeyExecutionRequirement: REQUIRED
+```
+
+The PeopleSoft client must have its browser authentication-flow override bound to `peoplesoft-step-up`. Reconcile it with:
+
+```bash
+./scripts/apply-demo-update.sh
+```
+
+The portal's PeopleSoft authorization request also sends `prompt=login` and `max_age=0` so a normal RHBK SSO cookie cannot silently satisfy the sensitive-app login.
+
+## 12. PeopleSoft says no passkey / no credential is available
+
+The dedicated PeopleSoft flow intentionally contains only the passwordless WebAuthn authenticator. Register a passwordless credential for `alex` first:
+
+1. Open the ACME Portal.
+2. Click **Register / verify passkey**.
+3. Complete Touch ID, Windows Hello, Face ID or another supported passkey authenticator.
+4. Run:
+
+```bash
+./scripts/verify-peoplesoft-stepup.sh
+```
+
+`alexCredentialTypes` should contain:
+
+```text
+webauthn-passwordless
+```
+
+If it does not, check the realm policy in **Authentication → Policies → WebAuthn Passwordless Policy** and confirm the site is being accessed over the HTTPS OpenShift Route.
+
+## 13. PeopleSoft callback reports an invalid redirect URI
+
+Check the current portal route and client redirect URI:
+
+```bash
+PORTAL="https://$(oc -n rhbk get route acme-portal -o jsonpath='{.spec.host}')"
+echo "$PORTAL/peoplesoft-callback"
+./scripts/apply-demo-update.sh
+```
+
+The update script reconciles `peoplesoft-app` to the current route each time it runs.
+
+## `verify-peoplesoft-stepup.sh` exits while obtaining an admin token
+
+Older v6 bundles attempted to authenticate the temporary bootstrap administrator by posting a password grant to the public `admin-cli` token endpoint. Some RHBK deployments do not permit that path for the temporary administrator, even though Admin CLI login works.
+
+v7 no longer depends on that token grant. Both bootstrap and verification run `kcadm.sh` inside the RHBK pod against `http://localhost:8080`.
+
+Check the admin path with:
+
+```bash
+./scripts/verify-admin-cli.sh
+```
+
+Then reconcile and verify the demo:
+
+```bash
+./scripts/apply-demo-update.sh
+./scripts/verify-peoplesoft-stepup.sh
+```

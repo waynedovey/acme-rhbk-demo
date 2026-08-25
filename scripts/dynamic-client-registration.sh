@@ -1,21 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
-NS=${NAMESPACE:-rhbk}
-b64d() { python3 -c 'import base64,sys; print(base64.b64decode(sys.stdin.read()).decode(), end="")'; }
-val() { oc -n "$NS" get secret "$1" -o jsonpath="{.data.$2}" | b64d; }
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source=lib-kcadm.sh
+source "$SCRIPT_DIR/lib-kcadm.sh"
 
-KC_URL="https://$(oc -n "$NS" get route acme-keycloak -o jsonpath='{.spec.host}')"
-ADMIN_USER=$(val acme-keycloak-initial-admin username)
-ADMIN_PASS=$(val acme-keycloak-initial-admin password)
-ADMIN_TOKEN=$(curl -skf --data-urlencode client_id=admin-cli --data-urlencode username="$ADMIN_USER" --data-urlencode password="$ADMIN_PASS" --data-urlencode grant_type=password "$KC_URL/realms/master/protocol/openid-connect/token" | jq -r .access_token)
+command -v curl >/dev/null || { echo "curl is required" >&2; exit 1; }
+acme_kcadm_login
 
-IAT=$(curl -skf -X POST "$KC_URL/admin/realms/acme-demo/clients-initial-access" \
-  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
-  -d '{"count":1,"expiration":600}' | jq -r .token)
+KC_URL="https://$(oc -n "$ACME_NS" get route "$ACME_KC_NAME" -o jsonpath='{.spec.host}')"
+
+IAT_JSON=$(acme_kcadm create clients-initial-access -r acme-demo -s count=1 -s expiration=600 -o)
+IAT=$(jq -r '.token // empty' <<<"$IAT_JSON")
+[[ -n "$IAT" ]] || { echo "ERROR: RHBK did not return an Initial Access Token" >&2; exit 1; }
 
 echo "Created 10-minute / one-use Initial Access Token. Registering a client..."
 RESP=$(curl -skf -X POST "$KC_URL/realms/acme-demo/clients-registrations/openid-connect" \
-  -H "Authorization: Bearer $IAT" -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $IAT" \
+  -H 'Content-Type: application/json' \
   -d '{"client_name":"ACME Self-Service Demo App","redirect_uris":["https://self-service-demo.example/callback"],"grant_types":["authorization_code"],"response_types":["code"],"token_endpoint_auth_method":"client_secret_basic"}')
 
 echo "$RESP" | jq .

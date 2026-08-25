@@ -1,5 +1,7 @@
 # ACME Digital Identity Demo — Red Hat build of Keycloak on OpenShift
 
+> **v7 fix:** bootstrap and verification now authenticate with `kcadm.sh` inside the RHBK pod instead of relying on an external password grant for the temporary bootstrap administrator. This is the recommended bundle for the PeopleSoft step-up demo.
+
 This repository builds a compact, customer-facing **Red Hat build of Keycloak (RHBK) 26.6** demonstration on an existing OpenShift / ACM Hub cluster.
 
 The lab is deliberately designed to show more than a basic Keycloak login. It demonstrates a modern identity architecture with:
@@ -7,12 +9,13 @@ The lab is deliberately designed to show more than a basic Keycloak login. It de
 - Identity brokering from multiple external OIDC identity providers
 - Account linking to a single local identity
 - Passkeys / WebAuthn passwordless authentication
+- PeopleSoft-specific high-assurance authentication that forces a passkey for the sensitive application
 - Scope-based user consent
 - OAuth 2.0 Standard Token Exchange (RFC 8693)
 - OpenShift workload identity using Kubernetes Service Account tokens instead of a static RHBK client secret
 - FAPI 2.0 client policy positioning for high-assurance APIs
 - API-driven / self-service client registration
-- A small ACME Portal application so the demo is visible and interactive
+- A customer-facing ACME Portal dashboard that clearly exposes every demo chapter and a simulated PeopleSoft HR application
 
 > **Demo/lab only.** This package intentionally uses a single RHBK replica and a lightweight PostgreSQL database to fit on a constrained ACM Hub. It is not a production reference architecture.
 
@@ -20,53 +23,31 @@ The lab is deliberately designed to show more than a basic Keycloak login. It de
 
 ## 1. Demo architecture
 
-```text
-                     +----------------------+
-                     |  Legacy Identity     |
-                     |  OIDC realm          |
-                     +----------+-----------+
-                                |
-                                | OIDC broker
-                                |
-+----------------------+        v        +----------------------+
-| Partner Identity     |   +--------------------+   | ACME Portal          |
-| OIDC realm           +-->| RHBK / acme-demo   |<--+ Auth Code + Consent |
-+----------------------+   |                    |   +----------------------+
-                           | - Brokered login   |
-                           | - Account linking  |
-                           | - Passkeys         |
-                           | - Consent scopes   |
-                           | - Token exchange   |
-                           | - FAPI policies    |
-                           +---------+----------+
-                                     |
-                    +----------------+----------------+
-                    |                                 |
-                    v                                 v
-             +-------------+                 +------------------+
-             | Orders API  |                 | OpenShift        |
-             | audience    |                 | workload         |
-             +-------------+                 | ServiceAccount   |
-                                             +--------+---------+
-                                                      |
-                                                      | short-lived JWT
-                                                      v
-                                             RHBK client auth
-                                             (no static secret)
-```
-
-The entire demo is deployed into the namespace:
+The portal is tailored to the customer scenario:
 
 ```text
-rhbk
+PeopleSoft -> Oracle Access Manager -> RHBK -> Microsoft Entra ID
+                                   |
+                                   +-> brokering / policy / step-up
 ```
 
-RHBK realms created by the bootstrap script:
+The lab simulates the external systems so you can demonstrate the identity behaviour without requiring real PeopleSoft, OAM or Entra connectivity. The two important browser clients are:
+
+```text
+acme-portal
+  normal brokered SSO / passkeys / consent / token exchange
+
+peoplesoft-app
+  browser flow override: peoplesoft-step-up
+  required: WebAuthn Passwordless Authenticator
+```
+
+The entire demo is deployed into namespace `rhbk`. Realms created by the bootstrap are:
 
 ```text
 acme-demo       Main ACME identity realm
-legacy-idp      Simulated legacy external identity provider
-partner-idp     Simulated second external identity provider
+legacy-idp      Simulated legacy/OAM-side identity source
+partner-idp     Represents Microsoft Entra ID for the customer demo
 ```
 
 ---
@@ -75,14 +56,15 @@ partner-idp     Simulated second external identity provider
 
 | Capability | What to show |
 |---|---|
-| Identity broker | Login to ACME through Legacy Identity or Partner Identity |
-| Account linking | Both external identities resolve to one ACME local user |
+| Identity broker | Login through Legacy Identity or Microsoft Entra ID (simulated) |
+| Account linking | External identities resolve to one ACME local user |
 | Passkeys | Register a platform passkey and sign in without typing a password |
-| Consent | Portal requests separate `personal-details`, `orders-history`, and `support-profile` scopes |
-| Token exchange | Portal exchanges the user's broad token for a token scoped to `orders-api` |
-| Workload identity | OpenShift ServiceAccount JWT authenticates a confidential RHBK client without a client secret |
-| FAPI 2.0 | Show built-in global FAPI 2 client profiles and apply one to a high-assurance client |
-| Automation | Bootstrap is driven by Admin REST; optional Dynamic Client Registration demo creates a client using a short-lived Initial Access Token |
+| **PeopleSoft step-up** | Establish normal SSO, then open PeopleSoft and show RHBK forcing Touch ID/passkey again |
+| Consent | Request separate `personal-details`, `orders-history`, and `support-profile` scopes |
+| Token exchange | Exchange the user's portal token for a token targeted to `orders-api` |
+| Workload identity | OpenShift ServiceAccount JWT authenticates a confidential RHBK client without a static RHBK secret |
+| API onboarding | Register a client using a short-lived Initial Access Token |
+| FAPI 2.0 | Show built-in FAPI 2 client profiles for high-assurance OAuth/OIDC |
 
 ---
 
@@ -172,6 +154,17 @@ INSTALL_PLAN_APPROVAL=Manual ./scripts/install.sh
 
 For production, review release notes and use controlled/manual upgrades.
 
+### Updating an existing v5 demo
+
+If the demo is already installed and healthy, you do **not** need to reinstall RHBK or PostgreSQL. Extract this bundle over a fresh directory and run:
+
+```bash
+./scripts/apply-demo-update.sh
+./scripts/verify-peoplesoft-stepup.sh
+```
+
+The update preserves the existing database and secrets, adds only the missing PeopleSoft client secret, updates the portal code, creates/reconciles `peoplesoft-app`, and creates the `peoplesoft-step-up` authentication flow.
+
 ---
 
 ### TLS note for the demo portal
@@ -193,7 +186,8 @@ It prints:
 - ACME Portal URL
 - Local ACME demo username/password
 - Legacy IdP username/password
-- Partner IdP username/password
+- Microsoft Entra ID simulation username/password
+- PeopleSoft client and passkey step-up flow details
 
 No passwords are stored in this README or committed into manifests. They are generated when you install the demo and held in OpenShift Secrets.
 
@@ -220,14 +214,15 @@ docs/DEMO-RUNBOOK.md
 A strong 40–45 minute sequence is:
 
 ```text
-00–05  Architecture and current broker model
-05–12  Brokered login + account linking
-12–20  Passkey registration and passwordless login
-20–27  Granular OAuth consent
-27–33  Standard Token Exchange
-33–39  OpenShift workload identity without a client secret
-39–43  API-driven self-service onboarding
-43–45  FAPI 2.0 positioning and wrap-up
+00–05  Customer architecture and broker model
+05–11  Brokered login + account linking
+11–16  Passkey registration / passwordless login
+16–24  PeopleSoft-specific passkey step-up
+24–29  Granular OAuth consent
+29–34  Standard Token Exchange
+34–39  OpenShift workload identity
+39–42  API-driven onboarding
+42–45  FAPI 2.0 and wrap-up
 ```
 
 ---
@@ -246,7 +241,7 @@ The RHBK login screen will show broker choices for:
 
 ```text
 Legacy Identity
-Partner Identity
+Microsoft Entra ID (simulated)
 ```
 
 The bootstrap creates the same test person in all three realms so you can demonstrate that an external identity can be linked to one local ACME identity.
@@ -329,7 +324,39 @@ Passkeys replace reusable passwords and OTP with phishing-resistant public-key a
 
 ---
 
-## 8. Demo #3 — granular consent
+## 8. Demo #3 — PeopleSoft-specific step-up authentication
+
+The customer-specific part of the lab is a second OIDC client:
+
+```text
+peoplesoft-app
+```
+
+It is bound to a dedicated browser flow:
+
+```text
+peoplesoft-step-up
+  -> WebAuthn Passwordless Authenticator    REQUIRED
+```
+
+The portal makes the sequence obvious:
+
+1. Register/verify a passkey.
+2. Sign in normally to establish ordinary ACME SSO.
+3. Click **Open PeopleSoft — require Touch ID / passkey**.
+4. RHBK forces the PeopleSoft-specific passkey flow.
+5. After successful step-up, the simulated PeopleSoft HR employee profile opens.
+6. Use **View token evidence** to show the OIDC client/session claims.
+
+The PeopleSoft authorization request also uses `prompt=login` and `max_age=0` so the stronger authentication is demonstrated every time rather than being hidden by a prior browser SSO cookie.
+
+### Talking point
+
+The user already has normal corporate SSO, but PeopleSoft contains sensitive personal information, so RHBK applies a stronger authentication control specifically to that application instead of increasing friction for every application.
+
+---
+
+## 9. Demo #4 — granular consent
 
 The bootstrap creates these optional OAuth scopes:
 
@@ -357,7 +384,7 @@ RHBK provides OAuth scopes, consent screens and authorization foundations. A ful
 
 ---
 
-## 9. Demo #4 — Standard Token Exchange
+## 10. Demo #5 — Standard Token Exchange
 
 RHBK 26.6 enables the supported **Standard Token Exchange V2** server capability by default. The requesting confidential client must also have its Standard Token Exchange capability enabled.
 
@@ -392,7 +419,7 @@ Do not forward a broad user token to every downstream service. Exchange it for a
 
 ---
 
-## 10. Demo #5 — OpenShift workload identity
+## 11. Demo #6 — OpenShift workload identity
 
 This is the machine-identity part of the demo.
 
@@ -435,39 +462,6 @@ The workload no longer needs a long-lived Keycloak client secret stored in a nam
 
 ---
 
-## 11. Demo #6 — FAPI 2.0
-
-The bootstrap creates client:
-
-```text
-high-assurance-api
-```
-
-In the Admin Console:
-
-```text
-Realm settings
-  -> Client policies
-  -> Profiles
-```
-
-Show the built-in global profiles:
-
-```text
-fapi-2-security-profile
-fapi-2-dpop-security-profile
-fapi-2-message-signing
-fapi-2-dpop-message-signing
-```
-
-Then create a client policy that applies the appropriate global FAPI 2 profile to `high-assurance-api`.
-
-### Talking point
-
-FAPI is useful beyond banking. It is a hardened OAuth/OIDC profile for APIs where stronger assurance, sender constraints, request integrity and stricter client behaviour are valuable.
-
----
-
 ## 12. Demo #7 — developer self-service / automation
 
 The entire lab bootstrap is itself performed with the RHBK Admin REST API.
@@ -501,7 +495,40 @@ For ongoing identity configuration automation use mechanisms such as:
 
 ---
 
-## 13. Troubleshooting
+## 13. Demo #8 — FAPI 2.0
+
+The bootstrap creates client:
+
+```text
+high-assurance-api
+```
+
+In the Admin Console:
+
+```text
+Realm settings
+  -> Client policies
+  -> Profiles
+```
+
+Show the built-in global profiles:
+
+```text
+fapi-2-security-profile
+fapi-2-dpop-security-profile
+fapi-2-message-signing
+fapi-2-dpop-message-signing
+```
+
+Then create a client policy that applies the appropriate global FAPI 2 profile to `high-assurance-api`.
+
+### Talking point
+
+FAPI is useful beyond banking. It is a hardened OAuth/OIDC profile for APIs where stronger assurance, sender constraints, request integrity and stricter client behaviour are valuable.
+
+---
+
+## 14. Troubleshooting
 
 See:
 
@@ -569,7 +596,7 @@ The database Service must exist before RHBK can initialize its JDBC datasource.
 
 ---
 
-## 14. Cleanup
+## 15. Cleanup
 
 Delete the entire demo:
 
@@ -583,7 +610,7 @@ The cluster-scoped RHBK CRDs may remain after cleanup. Do not delete them if ano
 
 ---
 
-## 15. Production differences
+## 16. Production differences
 
 For a production RHBK architecture do not copy the lab database/topology unchanged. Review at least:
 
@@ -602,7 +629,7 @@ For a production RHBK architecture do not copy the lab database/topology unchang
 
 ---
 
-## 16. Directory layout
+## 17. Directory layout
 
 ```text
 acme-rhbk-demo/
