@@ -1,0 +1,159 @@
+# Add-on only: the original ACME Portal, realms, services and database remain unchanged.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sagov-claims
+  namespace: rhbk
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sagov-portal
+  namespace: rhbk
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app: sagov-portal}
+  template:
+    metadata:
+      labels: {app: sagov-portal}
+    spec:
+      containers:
+        - name: portal
+          image: registry.access.redhat.com/ubi9/python-311:latest
+          command: ["python3", "/opt/app/app.py"]
+          ports: [{name: http, containerPort: 8080}]
+          env:
+            - name: RHBK_PUBLIC_URL
+              value: "https://not-configured.invalid"
+            - name: RHBK_BACKCHANNEL_URL
+              value: "http://acme-keycloak-service:8080"
+            - name: SAGOV_PORTAL_URL
+              value: "https://not-configured.invalid"
+            - name: CLAIMS_DB
+              value: "/data/claims.sqlite3"
+            - name: MYSAGOV_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef: {name: sagov-demo-secrets, key: mysagov-client-secret}
+            - name: SAGOV_READER_SECRET
+              valueFrom:
+                secretKeyRef: {name: sagov-demo-secrets, key: reader-client-secret}
+            - name: TRUMPS_API_KEY
+              valueFrom:
+                secretKeyRef: {name: sagov-demo-secrets, key: trumps-api-key}
+          volumeMounts:
+            - {name: app, mountPath: /opt/app}
+            - {name: claims, mountPath: /data}
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+      volumes:
+        - name: app
+          configMap: {name: sagov-portal-code}
+        - name: claims
+          persistentVolumeClaim: {claimName: sagov-claims}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: sagov-portal, namespace: rhbk}
+spec:
+  selector: {app: sagov-portal}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata: {name: sagov-portal, namespace: rhbk}
+spec:
+  to: {kind: Service, name: sagov-portal}
+  port: {targetPort: http}
+  tls: {termination: edge, insecureEdgeTerminationPolicy: Redirect}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: sagov-trumps, namespace: rhbk}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: sagov-trumps}
+  template:
+    metadata:
+      labels: {app: sagov-trumps}
+    spec:
+      containers:
+        - name: mock-trumps
+          image: registry.access.redhat.com/ubi9/python-311:latest
+          command: ["python3", "/opt/app/app.py"]
+          ports: [{name: http, containerPort: 8080}]
+          env:
+            - name: TRUMPS_API_KEY
+              valueFrom:
+                secretKeyRef: {name: sagov-demo-secrets, key: trumps-api-key}
+          volumeMounts: [{name: app, mountPath: /opt/app}]
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 20m, memory: 64Mi}
+            limits: {cpu: 250m, memory: 256Mi}
+      volumes:
+        - name: app
+          configMap: {name: sagov-trumps-code}
+---
+# TRUMPS is reachable only within the cluster: deliberately NO Route.
+apiVersion: v1
+kind: Service
+metadata: {name: sagov-trumps, namespace: rhbk}
+spec:
+  selector: {app: sagov-trumps}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+# Mailpit catches fictional verification/reset emails. NEVER send real identity data.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: sagov-mailpit, namespace: rhbk}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: sagov-mailpit}
+  template:
+    metadata:
+      labels: {app: sagov-mailpit}
+    spec:
+      containers:
+        - name: mailpit
+          image: docker.io/axllent/mailpit:v1.27
+          ports:
+            - {name: smtp, containerPort: 1025}
+            - {name: web, containerPort: 8025}
+          resources:
+            requests: {cpu: 20m, memory: 64Mi}
+            limits: {cpu: 250m, memory: 256Mi}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: sagov-mailpit, namespace: rhbk}
+spec:
+  selector: {app: sagov-mailpit}
+  ports:
+    - {name: smtp, port: 1025, targetPort: smtp}
+    - {name: web, port: 8025, targetPort: web}
+---
+# Lab mail UI includes reset links; do not expose this Route in a real environment.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata: {name: sagov-mailpit, namespace: rhbk}
+spec:
+  to: {kind: Service, name: sagov-mailpit}
+  port: {targetPort: web}
+  tls: {termination: edge, insecureEdgeTerminationPolicy: Redirect}

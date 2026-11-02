@@ -161,3 +161,20 @@ scripts/apply-demo-update.sh            Update an existing demo
 ```
 
 For detailed presenter notes see `docs/DEMO-RUNBOOK.md`; for troubleshooting see `docs/TROUBLESHOOTING.md`.
+
+
+## Optional SA Government citizen identity journey
+
+For the proposed SA ID / IDX / DIT / fictional TRUMPS journey, see
+[SA Government demo architecture and runbook](docs/SA-GOV-ARCHITECTURE.md).
+This add-on is **not** connected to real SA Government systems and intentionally
+keeps the original eight ACME demonstrations unchanged.
+
+    bash scripts/install-sagov-demo.sh
+    bash scripts/sagov-demo-info.sh
+
+Includes new self-registration/passkey SA ID realm, separate IDX/DIT/myID
+simulated realms, mySAGOV portal, a non-public mock TRUMPS verification
+API, synthetic email capture and a per-user claim/audit ledger.
+It does **not** claim real government proofing, assisted account recovery,
+consent management or delegated multi-user record access.

@@ -1,0 +1,27 @@
+name: SA Government demo checks
+on:
+  pull_request:
+    paths:
+      - "sagov/**"
+      - "scripts/*sagov*"
+      - "manifests/50-sagov.yaml"
+      - ".github/workflows/sagov-demo-tests.yml"
+  push:
+    branches: ["feature/sa-government-identity"]
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Python syntax and unit checks
+        run: |
+          python3 -m py_compile sagov/mysagov/app.py sagov/trumps/app.py sagov/tests/test_sagov.py
+          python3 -m unittest discover -s sagov/tests -v
+      - name: Shell syntax checks
+        run: |
+          bash -n scripts/bootstrap-sagov.sh scripts/install-sagov-demo.sh scripts/sagov-demo-info.sh
