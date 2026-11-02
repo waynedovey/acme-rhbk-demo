@@ -166,10 +166,12 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def redirect(self, url, cookie=None):
+    def redirect(self, url, cookie=None, flow=None):
         headers = {"Location": url}
         if cookie is not None:
             headers["Set-Cookie"] = "sagov_session=" + cookie + "; Path=/; Max-Age=1800; Secure; HttpOnly; SameSite=Lax"
+        elif flow is not None:
+            headers["Set-Cookie"] = "sagov_flow=" + flow + "; Path=/; Max-Age=600; Secure; HttpOnly; SameSite=Lax"
         self.respond(303, b"", headers)
 
     def current(self):
@@ -208,14 +210,24 @@ class Handler(BaseHTTPRequestHandler):
             state = secrets.token_urlsafe(24)
             verifier = secrets.token_urlsafe(48)
             challenge = b64url(hashlib.sha256(verifier.encode()).digest())
+            flow_nonce = secrets.token_urlsafe(24)
             PENDING[state] = {"expires": time.time() + 600, "verifier": verifier,
+                              "flow_nonce": flow_nonce,
                               "expected_sub": session["sub"] if path == "/connect-dit" else None}
-            return self.redirect(webauth_url(state, challenge, "idp_link:idx" if path == "/connect-dit" else None))
+            return self.redirect(webauth_url(state, challenge, "idp_link:idx" if path == "/connect-dit" else None),
+                                 flow=flow_nonce)
         if path == "/callback":
             args = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             state = args.get("state", [""])[0]
             entry = PENDING.pop(state, None)
-            if not entry or entry["expires"] <= time.time() or "code" not in args:
+            cookie_jar = SimpleCookie()
+            try:
+                cookie_jar.load(self.headers.get("Cookie", ""))
+                flow_cookie = cookie_jar["sagov_flow"].value
+            except (KeyError, ValueError):
+                flow_cookie = ""
+            if (not entry or entry["expires"] <= time.time() or "code" not in args
+                    or not hmac.compare_digest(entry["flow_nonce"], flow_cookie)):
                 return self.page("Sign-in failed", "<p class='warn'>Invalid or expired login attempt. Please try again.</p><a href='/'>Home</a>")
             try:
                 t = token("sa-id", CLIENT, CLIENT_SECRET,
