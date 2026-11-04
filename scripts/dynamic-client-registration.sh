@@ -18,7 +18,16 @@ KC_PUBLIC="https://$(oc -n "$ACME_NS" get route "$ACME_KC_NAME" -o jsonpath='{.s
 PORTAL_URL="https://$(oc -n "$ACME_NS" get route acme-portal -o jsonpath='{.spec.host}')"
 DEMO_KEY=$(acme_secret_value acme-demo-secrets portal-client-secret)
 TMP=$(mktemp -d); PF_PID=""
-cleanup(){ [[ -n "$PF_PID" ]] && kill "$PF_PID" >/dev/null 2>&1 || true; rm -rf "$TMP"; }
+
+cleanup() {
+  if [[ -n "$PF_PID" ]]; then
+    kill "$PF_PID" >/dev/null 2>&1 || true
+    wait "$PF_PID" 2>/dev/null || true
+  fi
+
+  rm -rf "$TMP"
+}
+
 trap cleanup EXIT
 
 LOCAL_PORT=$(python3 - <<'PY'
