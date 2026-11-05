@@ -14,6 +14,7 @@ A compact customer-facing **RHBK 26.6** demo for an existing OpenShift cluster. 
 6. **OpenShift workload identity** — a projected Kubernetes ServiceAccount JWT authenticates `acme-automation` with **Signed JWT - Federated**, with no permanent RHBK client secret.
 7. **API-driven onboarding** — a 10-minute, one-use Initial Access Token registers a client and proves the same IAT cannot be reused.
 8. **FAPI 2.0** — verifies the built-in RHBK FAPI 2 profiles and applies `fapi-2-security-profile` to `high-assurance-api` through a Client Policy.
+9. **RHBK as an IdP** — ACME Storefront and ACME Rewards use separate OIDC clients against one RHBK issuer, demonstrating SSO and client-specific token evidence.
 
 ## Prerequisites
 
@@ -47,7 +48,7 @@ Secrets are generated into OpenShift Secrets and are not stored in this reposito
 
 ## Recommended demo sequence
 
-Open the Portal printed by `demo-info.sh`, then walk through sections 1–8 in order.
+Open the Portal printed by `demo-info.sh`, then walk through sections 1–9 in order.
 
 ### 1. Identity brokering
 
@@ -161,3 +162,44 @@ scripts/apply-demo-update.sh            Update an existing demo
 ```
 
 For detailed presenter notes see `docs/DEMO-RUNBOOK.md`; for troubleshooting see `docs/TROUBLESHOOTING.md`.
+
+## 9. RHBK as an Identity Provider service
+
+Open **IdP examples** on the portal homepage, or visit `/idp`.
+This is a real OIDC authentication demonstration using **fictional ACME applications**:
+
+- **ACME Storefront** — client `acme-storefront`
+- **ACME Rewards** — client `acme-rewards`
+
+Each client uses the RHBK `acme-demo` realm as an **Identity Provider**.
+Both use OAuth 2.0 Authorization Code with mandatory PKCE S256.
+Sign into ACME Storefront and then open ACME Rewards **in the same browser**.
+RHBK can reuse the existing SSO session. Select
+**Compare client-specific OIDC evidence** to inspect:
+
+- The same trusted realm issuer and user `sub` across both applications
+- Separate client IDs and ID token audiences for each application
+- Sanitized token claims and short token fingerprints (never bearer tokens)
+
+**IdP versus broker:** As an IdP, RHBK authenticates ACME users and issues
+tokens for registered applications. The existing **Identity brokering**
+scenario demonstrates how RHBK can delegate authentication to fictional
+upstream providers instead.
+
+**Lab scope:** The applications are two separate OIDC clients hosted as
+views in the same ACME Portal, not independent deployments. The accounts
+are pre-created ACME demo users; self-registration is not enabled.
+All names and data are fictional.
+
+**Security:** This demo uses public clients with mandatory PKCE S256;
+production server-side applications should evaluate appropriate confidential
+client authentication and full token validation. Clearing local IdP demo
+sessions does **not** terminate the RHBK browser SSO session.
+
+Deploy updates:
+
+```bash
+./scripts/apply-demo-update.sh
+```
+
+See the [demo runbook](docs/DEMO-RUNBOOK.md) for a short walkthrough.

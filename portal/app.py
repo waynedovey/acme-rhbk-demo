@@ -9,6 +9,8 @@ import ssl
 import time
 import urllib.parse
 import urllib.request
+
+import idp_demo
 from http import cookies
 from wsgiref.simple_server import make_server
 
@@ -108,7 +110,7 @@ a.button.pending{{background:#ec7a08;color:#fff;min-width:260px}} a.button.compl
 </style>
 </head>
 <body>
-<header><div class="header-row"><div class="brand"><span>ACME</span> Digital Identity Demo</div><nav><a href="#scenario">Scenario</a><a href="#peoplesoft">PeopleSoft</a><a href="#passkeys">Passkeys</a><a href="#platform">Platform</a></nav></div></header>
+<header><div class="header-row"><div class="brand"><span>ACME</span> Digital Identity Demo</div><nav><a href="#scenario">Scenario</a><a href="#peoplesoft">PeopleSoft</a><a href="#passkeys">Passkeys</a><a href="#platform">Platform</a><a href="#idp-service">IdP examples</a></nav></div></header>
 <main>{body}</main>
 </body></html>'''
 
@@ -204,7 +206,7 @@ def status_button(label, href, done=False):
     return f'<a class="button {css}" href="{esc(href)}">{esc(label + suffix)}</a>'
 
 
-def demo_dashboard(portal_session, peoplesoft_session):
+def demo_dashboard(portal_session, peoplesoft_session, environ):
     portal_user = None
     if portal_session:
         focus, _, _ = claims_focus(portal_session)
@@ -229,8 +231,8 @@ def demo_dashboard(portal_session, peoplesoft_session):
 <section id="scenario" class="hero">
 <div class="kicker">ACME scenario</div>
 <h1>Modern identity controls with Red Hat build of Keycloak</h1>
-<p class="lead">One compact portal demonstrates identity brokering, passkeys, client-specific step-up, granular OAuth scopes, token exchange, workload identity, API-driven onboarding and FAPI 2 policy.</p>
-<div class="demo-index"><a href="#broker">1 Broker</a><a href="#passkeys">2 Passkey</a><a href="#peoplesoft">3 PeopleSoft step-up</a><a href="#consent">4 Consent</a><a href="#exchange">5 Token exchange</a><a href="#workload">6 Workload identity</a><a href="#onboarding">7 Client onboarding</a><a href="#fapi">8 FAPI 2.0</a></div>
+<p class="lead">One compact portal demonstrates identity brokering, passkeys, client-specific step-up, granular OAuth scopes, token exchange, workload identity, API-driven onboarding FAPI 2 policy, and RHBK acting as an IdP for multiple applications.</p>
+<div class="demo-index"><a href="#broker">1 Broker</a><a href="#passkeys">2 Passkey</a><a href="#peoplesoft">3 PeopleSoft step-up</a><a href="#consent">4 Consent</a><a href="#exchange">5 Token exchange</a><a href="#workload">6 Workload identity</a><a href="#onboarding">7 Client onboarding</a><a href="#fapi">8 FAPI 2.0</a><a href="#idp-service">9 RHBK as IdP</a></div>
 </section>'''
 
     peoplesoft = f'''
@@ -350,7 +352,7 @@ def demo_dashboard(portal_session, peoplesoft_session):
     session_bar += '<p><a class="button secondary" href="/logout">Clear local demo sessions</a></p></section>'
 
     footer = f'<section class="card"><p class="tiny">Realm: <code>{esc(REALM)}</code> &nbsp; RHBK: <code>{esc(KEYCLOAK_URL)}</code> &nbsp; Standard client: <code>{esc(CLIENT_ID)}</code> &nbsp; PeopleSoft client: <code>{esc(PEOPLESOFT_CLIENT_ID)}</code></p></section>'
-    return scenario + peoplesoft + cards + session_bar + footer
+    return scenario + peoplesoft + cards + idp_demo.section(environ) + session_bar + footer
 
 
 def app(environ, start_response):
@@ -362,6 +364,10 @@ def app(environ, start_response):
     psid = cookie_value(environ, "psid")
     portal_session = SESSIONS.get(sid)
     peoplesoft_session = PEOPLESOFT_SESSIONS.get(psid)
+
+    idp_result = idp_demo.handle(environ, start_response, base, layout, response)
+    if idp_result is not None:
+        return idp_result
 
     if path == "/health":
         return response(start_response, "ok", content_type="text/plain")
@@ -636,7 +642,7 @@ def app(environ, start_response):
         if psid: PEOPLESOFT_SESSIONS.pop(psid, None)
         start_response("302 Found", [("Location","/"),("Set-Cookie","sid=; Path=/; Max-Age=0; Secure; HttpOnly"),("Set-Cookie","psid=; Path=/; Max-Age=0; Secure; HttpOnly")]); return [b""]
 
-    return response(start_response, layout("ACME Digital Identity", demo_dashboard(portal_session, peoplesoft_session)))
+    return response(start_response, layout("ACME Digital Identity", demo_dashboard(portal_session, peoplesoft_session, environ)))
 
 
 if __name__ == "__main__":

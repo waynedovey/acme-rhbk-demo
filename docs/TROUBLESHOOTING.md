@@ -256,3 +256,31 @@ Then reconcile and verify the demo:
 ./scripts/apply-demo-update.sh
 ./scripts/verify-peoplesoft-stepup.sh
 ```
+
+## 14. Bootstrap fails with FAPI client token_endpoint_auth_method metadata error
+
+If `./scripts/apply-demo-update.sh` fails immediately after
+`Reconciling client: acme-demo/high-assurance-api` with:
+
+```text
+Invalid client metadata: token_endpoint_auth_method [invalid_client_metadata]
+```
+
+then the already-configured `acme-fapi2-high-assurance` Client Policy may be
+rejecting a generic RHBK client update that doesn't satisfy its authentication
+metadata requirements. This is unrelated to the new IdP demo clients.
+
+The fixed `bootstrap-demo.sh` **preserves** an existing
+`acme-demo/high-assurance-api` instead of resubmitting its entire client
+representation. FAPI configuration remains owned by `configure-fapi2.sh`.
+
+Update to the patched branch and rerun:
+
+```bash
+git pull --ff-only
+./scripts/apply-demo-update.sh
+```
+
+Do **not** delete the FAPI client, remove its role or policy, or reset the realm.
+If you intentionally change the FAPI policy, validate its client authentication
+requirements separately; this bootstrap workaround does not relax security.
