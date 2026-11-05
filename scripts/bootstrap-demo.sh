@@ -245,6 +245,15 @@ ensure_client acme-demo orders-api '{"clientId":"orders-api","name":"ACME Orders
 ensure_client acme-demo high-assurance-api "$(jq -n --arg r "$PORTAL_URL/fapi-callback" '{clientId:"high-assurance-api",name:"ACME High Assurance API",enabled:true,protocol:"openid-connect",publicClient:false,standardFlowEnabled:true,redirectUris:[$r]}')"
 ensure_client acme-demo acme-automation '{"clientId":"acme-automation","name":"ACME Automation Workload","enabled":true,"protocol":"openid-connect","publicClient":false,"standardFlowEnabled":false,"directAccessGrantsEnabled":false,"serviceAccountsEnabled":true}'
 
+
+# Separate fictional OIDC applications, both using this RHBK realm as the IdP.
+# Public demo clients require PKCE S256 and do not share a secret.
+for idp_app in acme-citizen-service acme-agency-service; do
+  ensure_client acme-demo "$idp_app" "$(jq -n \
+    --arg cid "$idp_app" --arg r "$PORTAL_URL/idp-callback" --arg o "$PORTAL_URL" \
+    '{clientId:$cid,name:$cid,description:"Fictional government-style ACME IdP demonstration",enabled:true,protocol:"openid-connect",publicClient:true,standardFlowEnabled:true,directAccessGrantsEnabled:false,serviceAccountsEnabled:false,consentRequired:false,redirectUris:[$r],webOrigins:[$o],attributes:{"pkce.code.challenge.method":"S256"}}')"
+done
+
 for s in personal-details orders-history support-profile; do attach_optional_scope acme-demo acme-portal "$s"; done
 attach_default_scope acme-demo acme-portal orders-api-audience
 attach_default_scope acme-demo acme-cli orders-api-audience
@@ -273,6 +282,21 @@ ensure_idp corporate-idp "Corporate Identity" corporate-idp "$CORPORATE_SECRET"
 
 # Ensure the passwordless WebAuthn registration required action is enabled.
 kcadm update authentication/required-actions/webauthn-register-passwordless -r acme-demo -s enabled=true >/dev/null
+
+
+# Check both IdP clients have correctly constrained redirect URIs and mandatory PKCE.
+for idp_app in acme-citizen-service acme-agency-service; do
+  idp_uuid=$(client_uuid acme-demo "$idp_app")
+  [[ -n "$idp_uuid" ]] || { echo "ERROR: missing IdP client $idp_app" >&2; exit 1; }
+  idp_cfg=$(kcadm get "clients/$idp_uuid" -r acme-demo)
+  if ! jq -e --arg expected "$PORTAL_URL/idp-callback" \
+    '.publicClient == true and .standardFlowEnabled == true and
+     .attributes["pkce.code.challenge.method"] == "S256" and
+     (.redirectUris | index($expected) != null)' <<<"$idp_cfg" >/dev/null; then
+    echo "ERROR: IdP client $idp_app must require PKCE S256 and have an exact callback." >&2
+    exit 1
+  fi
+done
 
 # Fail loudly if the browser clients are not actually present and correctly wired.
 PORTAL_UUID=$(client_uuid acme-demo acme-portal)
