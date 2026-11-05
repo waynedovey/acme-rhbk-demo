@@ -14,6 +14,7 @@ A compact customer-facing **RHBK 26.6** demo for an existing OpenShift cluster. 
 6. **OpenShift workload identity** — a projected Kubernetes ServiceAccount JWT authenticates `acme-automation` with **Signed JWT - Federated**, with no permanent RHBK client secret.
 7. **API-driven onboarding** — a 10-minute, one-use Initial Access Token registers a client and proves the same IAT cannot be reused.
 8. **FAPI 2.0** — verifies the built-in RHBK FAPI 2 profiles and applies `fapi-2-security-profile` to `high-assurance-api` through a Client Policy.
+9. **RHBK as an IdP** — two fictional government-style apps use separate OIDC clients against one RHBK issuer, demonstrating SSO and client-specific token evidence.
 
 ## Prerequisites
 
@@ -47,7 +48,7 @@ Secrets are generated into OpenShift Secrets and are not stored in this reposito
 
 ## Recommended demo sequence
 
-Open the Portal printed by `demo-info.sh`, then walk through sections 1–8 in order.
+Open the Portal printed by `demo-info.sh`, then walk through sections 1–9 in order.
 
 ### 1. Identity brokering
 
@@ -161,3 +162,37 @@ scripts/apply-demo-update.sh            Update an existing demo
 ```
 
 For detailed presenter notes see `docs/DEMO-RUNBOOK.md`; for troubleshooting see `docs/TROUBLESHOOTING.md`.
+
+## 9. RHBK as an Identity Provider service
+
+Open **IdP examples** on the portal homepage, or visit /idp.
+This is a live OIDC authorization-code demonstration with two fictional applications:
+
+- **Citizen Services** — client acme-citizen-service
+- **Agency Services** — client acme-agency-service
+
+Both clients use the same RHBK realm (acme-demo), with Authorization Code and
+mandatory PKCE S256. First sign into Citizen Services, then Agency Services
+in the **same browser**. RHBK can reuse its browser SSO session. Click
+**Compare client-specific OIDC evidence** to inspect the same issuer and user
+subject, but separate client IDs and token audiences. Only sanitized claims
+and token fingerprints are displayed.
+
+**IdP versus broker:** When RHBK is the IdP, it authenticates users and
+issues tokens to registered client applications. The existing broker demo
+instead delegates authentication to fictional upstream providers.
+
+**Scope:** These are separate OIDC clients represented as pages inside the
+same portal deployment, not independent applications. Existing ACME users
+sign in; self-registration is NOT enabled in this lab. The SA ID / IDX /
+DIT Identity / myID / TRUMPS explanation is future-state architecture only,
+not a real government integration. DIT proofing, durable record linking,
+delegated record access and matching require additional services.
+
+**Security:** Both clients are public OIDC clients using PKCE S256.
+Production server-side web apps would normally consider confidential clients.
+The **Clear local example sessions** button clears only portal evidence,
+not the RHBK SSO browser session.
+
+To apply to an existing environment, run ./scripts/apply-demo-update.sh.
+See docs/DEMO-RUNBOOK.md for the demo sequence.
