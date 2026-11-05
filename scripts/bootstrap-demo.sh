@@ -242,7 +242,16 @@ fi
 ensure_client acme-demo acme-portal "$(jq -n --arg s "$PORTAL_SECRET" --arg r "$PORTAL_URL/callback" --arg o "$PORTAL_URL" '{clientId:"acme-portal",name:"ACME Portal",enabled:true,protocol:"openid-connect",publicClient:false,secret:$s,clientAuthenticatorType:"client-secret",consentRequired:false,standardFlowEnabled:true,directAccessGrantsEnabled:true,redirectUris:[$r],webOrigins:[$o],attributes:{"standard.token.exchange.enabled":"true"}}')"
 ensure_client acme-demo acme-cli "$(jq -n --arg s "$CLI_SECRET" '{clientId:"acme-cli",name:"ACME CLI Demo Helper",enabled:true,protocol:"openid-connect",publicClient:false,secret:$s,clientAuthenticatorType:"client-secret",consentRequired:false,standardFlowEnabled:false,directAccessGrantsEnabled:true,attributes:{"standard.token.exchange.enabled":"true"}}')"
 ensure_client acme-demo orders-api '{"clientId":"orders-api","name":"ACME Orders API","enabled":true,"protocol":"openid-connect","publicClient":false,"standardFlowEnabled":false,"directAccessGrantsEnabled":false}'
-ensure_client acme-demo high-assurance-api "$(jq -n --arg r "$PORTAL_URL/fapi-callback" '{clientId:"high-assurance-api",name:"ACME High Assurance API",enabled:true,protocol:"openid-connect",publicClient:false,standardFlowEnabled:true,redirectUris:[$r]}')"
+# The FAPI 2 Client Policy validates sensitive client metadata on every update.
+# Once configure-fapi2.sh has applied that policy, generic client reconciliation
+# can fail with "token_endpoint_auth_method [invalid_client_metadata]".
+# This client is not used by the Portal browser flows: preserve its configuration.
+# configure-fapi2.sh owns its policy and future changes.
+if [[ -z "$(client_uuid acme-demo high-assurance-api)" ]]; then
+  ensure_client acme-demo high-assurance-api "$(jq -n --arg r "$PORTAL_URL/fapi-callback" '{clientId:"high-assurance-api",name:"ACME High Assurance API",enabled:true,protocol:"openid-connect",publicClient:false,standardFlowEnabled:true,redirectUris:[$r]}')"
+else
+  echo "Preserving existing FAPI 2 policy-managed client: acme-demo/high-assurance-api"
+fi
 ensure_client acme-demo acme-automation '{"clientId":"acme-automation","name":"ACME Automation Workload","enabled":true,"protocol":"openid-connect","publicClient":false,"standardFlowEnabled":false,"directAccessGrantsEnabled":false,"serviceAccountsEnabled":true}'
 
 
