@@ -218,12 +218,13 @@ def handle(environ, start_response, base, layout, response):
         return result
     if path == "/idp-callback":
         state = query.get("state", [""])[0]
-        flow = FLOWS.pop(state, None)
+        flow = FLOWS.get(state)
         browser_state = cookie(environ, "idpflow") or ""
         if not flow or not state or not secrets.compare_digest(browser_state, state) or time.time() - flow["created"] > 600:
             return response(start_response, layout("Invalid OIDC response",
                 '<div class="card"><h2>Invalid or expired authentication state</h2><a class="button" href="/idp">Try again</a></div>'),
                 "400 Bad Request")
+        FLOWS.pop(state, None)
         if "error" in query:
             return response(start_response, layout("Sign-in cancelled",
                 '<div class="card"><h2>RHBK sign-in was cancelled</h2><a class="button" href="/idp">Try again</a></div>'),
