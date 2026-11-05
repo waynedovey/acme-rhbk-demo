@@ -19,7 +19,7 @@ oc -n rhbk rollout status deployment/postgres-db --timeout=300s
 ./scripts/deploy-keycloak.sh
 
 # Build the ConfigMap directly from the readable Python source, then deploy the portal.
-oc -n rhbk create configmap acme-portal-code --from-file=app.py=portal/app.py \
+oc -n rhbk create configmap acme-portal-code --from-file=app.py=portal/app.py --from-file=idp_demo.py=portal/idp_demo.py \
   --dry-run=client -o yaml | oc apply -f -
 oc apply -f manifests/30-portal.yaml
 

@@ -22,7 +22,7 @@ fi
 echo "Checking RHBK Admin CLI authentication..."
 ./scripts/verify-admin-cli.sh
 
-oc -n "$NS" create configmap acme-portal-code --from-file=app.py=portal/app.py \
+oc -n "$NS" create configmap acme-portal-code --from-file=app.py=portal/app.py --from-file=idp_demo.py=portal/idp_demo.py \
   --dry-run=client -o yaml | oc apply -f -
 oc apply -f manifests/30-portal.yaml
 
