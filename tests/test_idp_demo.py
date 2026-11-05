@@ -17,6 +17,15 @@ def jwt(payload):
     return "eyJhbGciOiJub25lIn0." + part + ".demo-signature"
 
 
+class BootstrapSafetyTests(unittest.TestCase):
+    def test_existing_fapi_client_is_not_rewritten_by_bootstrap(self):
+        """RHBK FAPI policy may reject generic client metadata updates."""
+        script = (Path(__file__).resolve().parents[1] / "scripts" / "bootstrap-demo.sh").read_text()
+        self.assertIn('if [[ -z "$(client_uuid acme-demo high-assurance-api)" ]]; then', script)
+        self.assertIn("Preserving existing FAPI 2 policy-managed client", script)
+        self.assertIn("ensure_client acme-demo high-assurance-api", script)
+
+
 class IdpDemoTests(unittest.TestCase):
     def setUp(self):
         self.saved_url = idp_demo.KEYCLOAK_URL
