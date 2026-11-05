@@ -1,0 +1,19 @@
+name: Validate ACME portal and IdP examples
+on:
+  push:
+    branches: [main, feature/rhbk-idp-service-examples]
+  pull_request:
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile portal
+        run: python -m compileall -q portal tests
+      - name: Validate shell scripts
+        run: bash -n scripts/bootstrap-demo.sh scripts/install.sh scripts/apply-demo-update.sh
+      - name: Run offline IdP tests
+        run: python -m unittest discover -s tests -v
